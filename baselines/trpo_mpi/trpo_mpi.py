@@ -11,6 +11,7 @@ from baselines.common.cg import cg
 from baselines.common.input import observation_placeholder
 from baselines.common.policies import build_policy
 from contextlib import contextmanager
+import os
 
 try:
     from mpi4py import MPI
@@ -102,6 +103,8 @@ def learn(*,
         vf_iters =3,
         max_episodes=0, max_iters=0,  # time constraint
         callback=None,
+        save_interval=0,
+        save_path=None,
         load_path=None,
         **network_kwargs
         ):
@@ -139,6 +142,8 @@ def learn(*,
 
     callback                function to be called with (locals(), globals()) each policy optimization step
 
+    save_interval: int      number of timesteps between saving events
+
     load_path               str, path to load the model from (default: None, i.e. no model is loaded)
 
     **network_kwargs        keyword arguments to the policy / network builder. See baselines.common/policies.py/build_policy and arguments to a particular type of network
@@ -164,6 +169,9 @@ def learn(*,
             intra_op_parallelism_threads=cpus_per_worker
     ))
 
+    if save_path:
+        # latest_policy_path = os.path.join(save_path, 'policy_latest')
+        best_policy_path = os.path.join(save_path, 'policy_best')
 
     policy = build_policy(env, network, value_network='copy', **network_kwargs)
     set_global_seeds(seed)
@@ -283,6 +291,11 @@ def learn(*,
     assert sum([max_iters>0, total_timesteps>0, max_episodes>0]) < 2, \
         'out of max_iters, total_timesteps, and max_episodes only one should be specified'
 
+    best_mean_rewbuffer = -np.inf
+    checkdir = os.path.join(logger.get_dir(), 'checkpoints')
+    os.makedirs(checkdir, exist_ok=True)
+    best_savepath = os.path.join(checkdir, "best")
+
     while True:
         if callback: callback(locals(), globals())
         if total_timesteps and timesteps_so_far >= total_timesteps:
@@ -353,7 +366,7 @@ def learn(*,
                 assert all(np.allclose(ps, paramsums[0]) for ps in paramsums[1:])
 
         for (lossname, lossval) in zip(loss_names, meanlosses):
-            logger.record_tabular(lossname, lossval)
+            logger.logkv(lossname, lossval)
 
         with timed("vf"):
 
@@ -363,7 +376,7 @@ def learn(*,
                     g = allmean(compute_vflossandgrad(mbob, mbret))
                     vfadam.update(g, vf_stepsize)
 
-        logger.record_tabular("ev_tdlam_before", explained_variance(vpredbefore, tdlamret))
+        logger.logkv("ev_tdlam_before", explained_variance(vpredbefore, tdlamret))
 
         lrlocal = (seg["ep_lens"], seg["ep_rets"]) # local values
         if MPI is not None:
@@ -374,17 +387,34 @@ def learn(*,
         lens, rews = map(flatten_lists, zip(*listoflrpairs))
         lenbuffer.extend(lens)
         rewbuffer.extend(rews)
-
-        logger.record_tabular("EpLenMean", np.mean(lenbuffer))
-        logger.record_tabular("EpRewMean", np.mean(rewbuffer))
-        logger.record_tabular("EpThisIter", len(lens))
+        mean_rewbuffer = np.mean(rewbuffer)
+        logger.logkv("eplenmean", np.mean(lenbuffer))
+        logger.logkv("eprewmean", mean_rewbuffer)
+        logger.logkv("eprewsem", np.std(rewbuffer))
+        logger.logkv("epthisiter", len(lens))
         episodes_so_far += len(lens)
         timesteps_so_far += sum(lens)
+
+        # save the policy if it's better than the previous one
+
+        if mean_rewbuffer > best_mean_rewbuffer:
+            print('Due to increasing mean reward from %d to %d, update best model to %s' % (
+            best_mean_rewbuffer, mean_rewbuffer, best_policy_path))
+            best_mean_rewbuffer = mean_rewbuffer
+            U.save_state(best_policy_path)
+
+        if save_interval and logger.get_dir() and (MPI is None or MPI.COMM_WORLD.Get_rank() == 0):
+
+            if iters_so_far % save_interval == 0:
+                savepath = os.path.join(checkdir, '%.5i'%iters_so_far)
+                print('Saving to', savepath)
+                U.save_trpo_variables(savepath)
+
         iters_so_far += 1
 
-        logger.record_tabular("EpisodesSoFar", episodes_so_far)
-        logger.record_tabular("TimestepsSoFar", timesteps_so_far)
-        logger.record_tabular("TimeElapsed", time.time() - tstart)
+        logger.logkv("epsofar", episodes_so_far)
+        logger.logkv("timestepsofar", timesteps_so_far)
+        logger.logkv("timelapsed", time.time() - tstart)
 
         if rank==0:
             logger.dump_tabular()
@@ -405,4 +435,19 @@ def get_vf_trainable_variables(scope):
 
 def get_pi_trainable_variables(scope):
     return [v for v in get_trainable_variables(scope) if 'pi' in v.name[len(scope):].split('/')]
+
+def save(self, save_path):
+    """
+    Save the model
+    """
+    saver = tf.train.Saver()
+    saver.save(self.sess, save_path)
+
+def load(self, load_path):
+    """
+    Load the model
+    """
+    saver = tf.train.Saver()
+    print('Loading ' + load_path)
+    saver.restore(self.sess, load_path)
 
