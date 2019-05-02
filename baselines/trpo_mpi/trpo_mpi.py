@@ -398,7 +398,7 @@ def learn(*,
         # save the policy if it's better than the previous one
 
         if mean_rewbuffer > best_mean_rewbuffer:
-            print('Due to increasing mean reward from %d to %d, update best model to %s' % (
+            print('Due to increasing mean reward from %f to %f, update best model to %s' % (
             best_mean_rewbuffer, mean_rewbuffer, best_policy_path))
             best_mean_rewbuffer = mean_rewbuffer
             U.save_state(best_policy_path)
