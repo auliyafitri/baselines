@@ -247,7 +247,7 @@ class DiagGaussianPd(Pd):
     def sample(self):
         result = self.mean + self.std * tf.random_normal(tf.shape(self.mean))
         clipped = tf.clip_by_value(result, -0.04, 0.04)
-        return result
+        return clipped
     @classmethod
     def fromflat(cls, flat):
         return cls(flat)
