@@ -245,7 +245,9 @@ class DiagGaussianPd(Pd):
     def entropy(self):
         return tf.reduce_sum(self.logstd + .5 * np.log(2.0 * np.pi * np.e), axis=-1)
     def sample(self):
-        return self.mean + self.std * tf.random_normal(tf.shape(self.mean))
+        result = self.mean + self.std * tf.random_normal(tf.shape(self.mean))
+        clipped = tf.clip_by_value(result, -0.04, 0.04)
+        return result
     @classmethod
     def fromflat(cls, flat):
         return cls(flat)
