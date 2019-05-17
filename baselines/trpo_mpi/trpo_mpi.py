@@ -440,14 +440,12 @@ def save(self, save_path):
     """
     Save the model
     """
-    saver = tf.train.Saver()
-    saver.save(self.sess, save_path)
+    U.save_state(save_path)
 
 def load(self, load_path):
     """
     Load the model
     """
-    saver = tf.train.Saver()
     print('Loading ' + load_path)
-    saver.restore(self.sess, load_path)
+    U.load_state(load_path)
 
