@@ -170,7 +170,7 @@ def learn(*,
     ))
 
     if save_path:
-        # latest_policy_path = os.path.join(save_path, 'policy_latest')
+        latest_policy_path = os.path.join(save_path, 'latest/policy_latest')
         best_policy_path = os.path.join(save_path, 'policy_best')
 
     policy = build_policy(env, network, value_network='copy', **network_kwargs)
@@ -395,8 +395,10 @@ def learn(*,
         episodes_so_far += len(lens)
         timesteps_so_far += sum(lens)
 
-        # save the policy if it's better than the previous one
+        # save the latest policy
+        U.save_state(latest_policy_path)
 
+        # save the best policy if it's better than the previous one
         if mean_rewbuffer > best_mean_rewbuffer:
             print('Due to increasing mean reward from %f to %f, update best model to %s' % (
             best_mean_rewbuffer, mean_rewbuffer, best_policy_path))
