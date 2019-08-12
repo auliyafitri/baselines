@@ -6,6 +6,8 @@ from baselines import logger
 from collections import deque
 from baselines.common import explained_variance, set_global_seeds
 from baselines.common.policies import build_policy
+import baselines.common.tf_util as U
+
 try:
     from mpi4py import MPI
 except ImportError:
@@ -21,7 +23,7 @@ def constfn(val):
 def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0, lr=3e-4,
             vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
             log_interval=10, nminibatches=4, noptepochs=4, cliprange=0.2,
-            save_interval=0, load_path=None, model_fn=None, **network_kwargs):
+            save_interval=0, save_path=None, load_path=None, model_fn=None, **network_kwargs):
     '''
     Learn policy using PPO algorithm (https://arxiv.org/abs/1707.06347)
 
@@ -107,6 +109,10 @@ def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=2
                     nsteps=nsteps, ent_coef=ent_coef, vf_coef=vf_coef,
                     max_grad_norm=max_grad_norm)
 
+    if save_path:
+        latest_policy_path = osp.join(save_path, 'latest/policy_latest')
+        best_policy_path = osp.join(save_path, 'policy_best')
+
     if load_path is not None:
         model.load(load_path)
     # Instantiate the runner object
@@ -120,6 +126,9 @@ def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=2
 
     # Start total timer
     tfirststart = time.perf_counter()
+
+    # for saving best policy
+    best_mean_rewbuffer = -np.inf
 
     nupdates = total_timesteps//nbatch
     for update in range(1, nupdates+1):
@@ -186,6 +195,7 @@ def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=2
             logger.logkv("fps", fps)
             logger.logkv("explained_variance", float(ev))
             logger.logkv('eprewmean', safemean([epinfo['r'] for epinfo in epinfobuf]))
+            mean_rewbuffer = safemean([epinfo['r'] for epinfo in epinfobuf])
             logger.logkv('eplenmean', safemean([epinfo['l'] for epinfo in epinfobuf]))
             if eval_env is not None:
                 logger.logkv('eval_eprewmean', safemean([epinfo['r'] for epinfo in eval_epinfobuf]) )
@@ -195,10 +205,21 @@ def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=2
                 logger.logkv(lossname, lossval)
             if MPI is None or MPI.COMM_WORLD.Get_rank() == 0:
                 logger.dumpkvs()
+
+            # save latest policy
+            U.save_state(latest_policy_path)
+
+            # save the best policy if it's better than the previous one
+            if mean_rewbuffer > best_mean_rewbuffer:
+                print('Due to increasing mean reward from %f to %f, update best model to %s' % (
+                    best_mean_rewbuffer, mean_rewbuffer, best_policy_path))
+                best_mean_rewbuffer = mean_rewbuffer
+                U.save_state(best_policy_path)
+
         if save_interval and (update % save_interval == 0 or update == 1) and logger.get_dir() and (MPI is None or MPI.COMM_WORLD.Get_rank() == 0):
             checkdir = osp.join(logger.get_dir(), 'checkpoints')
             os.makedirs(checkdir, exist_ok=True)
-            savepath = osp.join(checkdir, '%.5i'%update)
+            savepath = osp.join(save_path, '%.5i'%update)
             print('Saving to', savepath)
             model.save(savepath)
     return model
